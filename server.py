@@ -76,6 +76,17 @@ async def get_article_details(article_id: int) -> str:
     return format_article_details(article)
 
 @mcp.tool()
+async def get_my_articles() -> str:
+    """
+    Get the articles written by the authenticated user
+    """
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/articles/me", headers={"api-key": os.getenv("DEV_TO_API_KEY")}, timeout=10.0)
+        response.raise_for_status()
+        articles = response.json()
+    return format_articles(articles[:10])
+
+@mcp.tool()
 async def get_articles_by_username(username: str) -> str:
     """
     Get articles written by a specific user
