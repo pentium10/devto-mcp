@@ -1,6 +1,11 @@
-import httpx
-from mcp.server.fastmcp import FastMCP, Context
 import os
+
+import httpx
+from dotenv import load_dotenv
+from mcp.server.fastmcp import Context, FastMCP
+
+# Load environment variables
+load_dotenv()
 
 # Create a Dev.to MCP server
 mcp = FastMCP("Dev.to MCP Server")
@@ -13,7 +18,10 @@ async def fetch_from_api(path: str, params: dict = None) -> dict:
     """Helper function to fetch data from Dev.to API"""
     async with httpx.AsyncClient() as client:
         url = f"{BASE_URL}{path}"
-        response = await client.get(url, params=params, timeout=10.0)
+        headers = {}
+        if os.getenv("DEV_TO_API_KEY"):
+            headers["api-key"] = os.getenv("DEV_TO_API_KEY")
+        response = await client.get(url, params=params, headers=headers, timeout=10.0)
         response.raise_for_status()
         return response.json()
 
@@ -80,8 +88,11 @@ async def get_my_articles() -> str:
     """
     Get the articles written by the authenticated user
     """
+    api_key = os.getenv("DEV_TO_API_KEY")
+    key_hint = f"{api_key[:4]}...{api_key[-4:]}" if api_key else "None"
+    
     async with httpx.AsyncClient() as client:
-        response = await client.get(f"{BASE_URL}/articles/me", headers={"api-key": os.getenv("DEV_TO_API_KEY")}, timeout=10.0)
+        response = await client.get(f"{BASE_URL}/articles/me", headers={"api-key": api_key}, timeout=10.0)
         response.raise_for_status()
         articles = response.json()
     return format_articles(articles[:10])
@@ -153,26 +164,48 @@ async def update_article(article_id: int, title: str = None, body_markdown: str 
         tags: New comma-separated list of tags (optional)
         published: Change publish status (optional)
     """
-    # First get the current article data
-    article = await fetch_from_api(f"/articles/{article_id}")
-    
-    # Prepare update data with only the fields that are provided
-    update_data = {"article": {}}
-    if title is not None:
-        update_data["article"]["title"] = title
-    if body_markdown is not None:
-        update_data["article"]["body_markdown"] = body_markdown
-    if tags is not None:
-        update_data["article"]["tags"] = tags
-    if published is not None:
-        update_data["article"]["published"] = published
+    api_key = os.getenv("DEV_TO_API_KEY")
+    headers = {
+        "api-key": api_key,
+        "Content-Type": "application/json"
+    }
     
     async with httpx.AsyncClient() as client:
-        response = await client.put(f"{BASE_URL}/articles/{article_id}", json=update_data, timeout=10.0)
-        response.raise_for_status()
-        updated_article = response.json()
-    
-    return f"Article updated successfully\nURL: {updated_article.get('url')}"
+        try:
+            # First get the current article data
+            get_response = await client.get(f"{BASE_URL}/articles/{article_id}", headers=headers, timeout=10.0)
+            get_response.raise_for_status()
+            article = get_response.json()
+            
+            # Prepare update data with only the fields that are provided
+            update_data = {"article": {}}
+            if title is not None:
+                update_data["article"]["title"] = title
+            if body_markdown is not None:
+                update_data["article"]["body_markdown"] = body_markdown
+            if tags is not None:
+                update_data["article"]["tags"] = tags
+            if published is not None:
+                update_data["article"]["published"] = published
+            
+            # Perform the update
+            response = await client.put(
+                f"{BASE_URL}/articles/{article_id}", 
+                json=update_data, 
+                headers=headers, 
+                timeout=10.0
+            )
+            
+            if response.status_code != 200:
+                return f"Error updating article {article_id}: {response.status_code} - {response.text}"
+            
+            updated_article = response.json()
+            return f"Article updated successfully\nURL: {updated_article.get('url')}"
+            
+        except httpx.HTTPStatusError as e:
+            return f"HTTP error during update: {e.response.status_code} - {e.response.text}"
+        except Exception as e:
+            return f"Exception during update: {str(e)}"
 
 # Helper formatting functions
 
@@ -208,12 +241,15 @@ def format_article_details(article: dict) -> str:
     published_date = article.get("readable_publish_date", "Unknown date")
     body = article.get("body_markdown", "No content available.")
     tags = article.get("tags", "")
+    article_id = article.get("id", "Unknown")
     
-    result = f"# {title}\n\n"
+    result = f"--- METADATA ---\n"
+    result += f"ID: {article_id}\n"
+    result += f"Title: {title}\n"
     result += f"Author: {author}\n"
     result += f"Published: {published_date}\n"
-    result += f"Tags: {tags}\n\n"
-    result += "## Content\n\n"
+    result += f"Tags: {tags}\n"
+    result += f"--- CONTENT ---\n\n"
     result += body
     
     return result
